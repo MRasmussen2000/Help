@@ -1,0 +1,112 @@
+Set the ARPE value to 1 to enable the overflow (CR_ARPE) bit 7.
+
+
+//------------------- GPIO Initialization for USART 2 -----------------
+	// PA.e =AFB (UART4_TX), PA.1 =AFB (UART4_RX), See Appendix I
+	// The code is very similar to the one given above.
+	RCC->APB1ENR1 |= RCC_APB1ENR1_USART2EN;
+	//RCC->APB1ENR1 |= RCC_APB1ENR1_UART4EN;
+	// Select system clock (SYSClK) USART clock
+	// 00 = PCLK, 01 = System clock (SYSCLK),
+	// 10 = HSI16, 11 = LSE
+	RCC->CCIPR &= ~ (RCC_CCIPR_USART1SEL | RCC_CCIPR_UART4SEL);
+	RCC->CCIPR |= (RCC_CCIPR_USART1SEL_0 | RCC_CCIPR_UART4SEL_0);
+	//Disable USART
+	USART2->CR1 &= ~USART_CR1_UE;
+	//Set data Length to 8 bits
+	//ee = B data bits, e1 = 9 data bits, 1e = 7 data bits
+	USART2->CR1 &= ~USART_CR1_M;
+	//Select 1 stop bit
+	//ee = 1 stop bit e1 = e.s stop bit
+	//1e = 2 Stop bits 11 = 1.5 Stop bit
+	USART2->CR2 &= ~USART_CR2_STOP;
+	//Set parity control as no parity
+	//e = no parity,
+	//1 = parity enabled (then, program PS bit to select Even or Odd parity)
+	USART2->CR1 &= ~USART_CR1_PCE;
+	//Oversampling by 16
+	//0 =oversampling by 16, 1 =oversampling by 8
+	USART2->CR1 &= ~USART_CR1_OVER8;
+	//Set Baud rate to 9600 using APB frequency (Be MHz)
+	//See Example 1 in Section 22.1.2
+	USART2->BRR = 0x1A0;	//clock speed 4mhz/9600 baud = 416.666, textbook pg 547
+	//Enable transmission and reception
+	USART2->CR1 |= (USART_CR1_TE | USART_CR1_RE);
+	// Enable USART
+	USART2->CR1 |= USART_CR1_UE;
+	//Verify that USART is ready for transmission
+	//TEACK: Transmit enable acknowledge flag. Hardware sets or resets it.
+	while ((USART2->ISR & USART_ISR_TEACK) == 0);
+	//Verify that USART is ready for reception
+	//REACK: Receive enable acknowledge flag. Hardware sets or resets it.
+	while ((USART2->ISR & USART_ISR_REACK) == 0);
+	
+	RCC->CR |= RCC_CR_HSION; //enable hsi clock
+	while(!(RCC->CR & RCC_CR_HSIRDY)); //wait until ready
+	
+	GPIOB->MODER &= 0xFFFFFFFC;
+	GPIOB->MODER |= 0x1;  //setting the mode for gpio b pin 0 (temp sensor)
+	
+	GPIOA->MODER |= 0x3;	//uart pin mode
+	
+	GPIOA->ASCR |= 0x1;  //enable analog system control register to allow uart
+	
+	RCC->AHB2ENR |= RCC_AHB2ENR_ADCEN; //enable adc clock
+	
+	ADC1->CR &= ~(ADC_CR_ADEN); //disable ADC1 to configure it
+	
+	SYSCFG->CFGR1 |= SYSCFG_CFGR1_BOOSTEN;	//enable i/o analog switches
+	
+	ADC123_COMMON->CCR |= ADC_CCR_VREFEN;	//enable conversion internal channels
+	
+	ADC123_COMMON->CCR &= ~(ADC_CCR_PRESC);	//configure the adc prescaler to select adc clock frquency in adc123
+	
+	ADC123_COMMON->CCR |= (ADC_CCR_CKMODE_0); //seleect syncronous clock mode
+	
+	ADC123_COMMON->CCR &= ~(ADC_CCR_DUAL);	// configure adcs as independent
+	
+	ADC_Wakeup(); // adc is in deep power down mode by default, needs to be woken up
+	
+	ADC1->CFGR &= ~(ADC_CFGR_RES); //set res bits to set resolution to 12 bits
+	
+	ADC1->CFGR &= ~(ADC_CFGR_ALIGN); //right alignment
+	
+	ADC1->SQR1 &= ~(ADC_SQR1_L); // clear bits to select 1 conversion in the regular channel conversion sequence
+	
+	ADC1->SQR1 |= (17 << 6);	//specify channel number 6
+		
+	ADC1->SMPR2 |= ADC_SMPR2_SMP17; // wake up temperature sensor
+	
+	ADC1->CFGR &= ~(ADC_CFGR_CONT); // select adc discontinous mode
+	
+	ADC1->CFGR &= ~(ADC_CFGR_EXTEN); //select software trigger
+	
+	// now that adc is set up, we can re enable it
+	ADC1->CR |= ADC_CR_ADEN;	//enable adc like its a clock
+	
+	while(!(ADC1->ISR & ADC_ISR_ADRDY));	//wait until the ready flag == 0
+	
+	ADC123_COMMON->CCR |= 0x800000; //reset internal conversion register
+
+void ADC_Wakeup(void) {
+	volatile int wait_time;
+	// To start ADC operations, the following sequence should be applied
+	// DEEPPWD = e: ADC not in deep-power down
+	// DEEPPWD = 1: ADC in deep-power-down (default reset state)
+	if ((ADC1->CR & ADC_CR_DEEPPWD) == ADC_CR_DEEPPWD) {
+		// Exit deep power down mode if still in that state
+		ADC1->CR &= ~ADC_CR_DEEPPWD;
+	}
+	// Enable the ADC internal voltage regulator
+	// Before performing any operation such as Launching a calibration or
+	// enabling the ADC, the ADC voltage regulator must first be enabled and
+	// the software must wait for the regulator start-up time.
+	ADC1->CR |= ADC_CR_ADVREGEN;
+	// Wait for ADC voltage requlator start-up time. The software must wait for
+	// the startup time of the ADC voltage regulator (T_ADCVREG_STUP, i.e., 20
+	// us) before Launching a calibration or enabling the ADC.
+	wait_time = 20 * (4000000 / 1000000);
+	while (wait_time != 0) {
+		wait_time--;
+	}
+}
